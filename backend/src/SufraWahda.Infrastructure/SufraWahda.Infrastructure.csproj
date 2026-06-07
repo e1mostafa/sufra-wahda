@@ -10,8 +10,7 @@
     <ProjectReference Include="..\SufraWahda.Application\SufraWahda.Application.csproj" />
     <ProjectReference Include="..\SufraWahda.Domain\SufraWahda.Domain.csproj" />
     <PackageReference Include="EFCore.NamingConventions" Version="8.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Http.Extensions" Version="8.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
   </ItemGroup>
 
   <ItemGroup>
