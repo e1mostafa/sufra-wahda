@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { --burgundy: #7b1e3a; --gold: #c9973a; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Cairo', sans-serif; direction: rtl; background: #f4f6fa; color: #1e293b; }
+
+@layer components {
+  .btn-primary { @apply bg-[#7b1e3a] text-white font-semibold rounded-xl px-5 py-2.5 hover:bg-[#5c1429] transition-all disabled:opacity-50 cursor-pointer; }
+  .btn-danger  { @apply bg-red-600 text-white font-semibold rounded-xl px-4 py-2 hover:bg-red-700 transition-all; }
+  .btn-success { @apply bg-green-600 text-white font-semibold rounded-xl px-4 py-2 hover:bg-green-700 transition-all; }
+  .btn-ghost   { @apply bg-white text-gray-600 font-semibold rounded-xl px-4 py-2 border border-gray-200 hover:bg-gray-50 transition-all; }
+  .input-field { @apply w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#7b1e3a]/20 focus:border-[#7b1e3a] transition-all text-sm; }
+  .card        { @apply bg-white rounded-2xl border border-gray-100 shadow-sm; }
+  .badge       { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold; }
+  .table-row   { @apply border-b border-gray-50 hover:bg-gray-50/80 transition-colors; }
+}

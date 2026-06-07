@@ -1,0 +1,68 @@
+version: '3.8'
+
+# ─── Development overrides ────────────────────────────────────────────────────
+# Run: docker-compose -f docker-compose.yml -f docker-compose.override.yml up
+# Or for dev only: docker-compose up postgres redis
+# Then run API and frontends locally
+
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: sufra_wahda_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/schema-fixes.sql:/docker-entrypoint-initdb.d/02-fixes.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql
+
+  redis:
+    ports:
+      - "6379:6379"
+    command: redis-server --loglevel warning
+    environment: {}  # No password in dev
+
+  api:
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=sufra_wahda_dev;Username=postgres;Password=postgres
+      - ConnectionStrings__Redis=
+      - Jwt__Secret=dev-secret-key-at-least-32-characters-long!!
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: build  # Stop at build stage for faster dev builds
+
+  # In development, don't build frontends — run them locally with npm run dev
+  customer-web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend/customer-web:/app
+      - /app/node_modules
+      - /app/.next
+    command: sh -c "npm install && npm run dev"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:5000/api/v1
+      - NEXT_PUBLIC_SIGNALR_URL=http://localhost:5000
+    ports:
+      - "3000:3000"
+
+  restaurant-dashboard:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend/restaurant-dashboard:/app
+      - /app/node_modules
+      - /app/.next
+    command: sh -c "npm install && npm run dev"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:5000/api/v1
+    ports:
+      - "3001:3001"
+
+volumes:
+  postgres_dev_data:

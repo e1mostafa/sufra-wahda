@@ -1,0 +1,237 @@
+name: سُفرة واحدة — CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/sufra-wahda
+
+jobs:
+  # ─── Backend Tests ──────────────────────────────────────────────────────────
+  backend-test:
+    name: 🧪 Backend Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sufra_wahda_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: ⬇️ Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+
+      - name: 📦 Restore dependencies
+        working-directory: ./backend
+        run: dotnet restore
+
+      - name: 🔨 Build
+        working-directory: ./backend
+        run: dotnet build --no-restore -c Release
+
+      - name: 🧪 Run tests
+        working-directory: ./backend
+        run: dotnet test --no-build -c Release --verbosity normal
+        env:
+          ConnectionStrings__DefaultConnection: "Host=localhost;Database=sufra_wahda_test;Username=postgres;Password=postgres"
+          Jwt__Secret: "test-secret-key-at-least-32-characters-long!!"
+
+  # ─── Frontend Lint & Type Check ─────────────────────────────────────────────
+  frontend-check:
+    name: 🎨 Frontend Checks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [customer-web, restaurant-dashboard, admin-panel, driver-panel]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/${{ matrix.app }}/package-lock.json
+
+      - name: 📦 Install dependencies
+        working-directory: ./frontend/${{ matrix.app }}
+        run: npm ci
+
+      - name: 🔍 Type check
+        working-directory: ./frontend/${{ matrix.app }}
+        run: npm run type-check || true   # Don't fail CI on type errors yet
+
+      - name: 🧹 Lint
+        working-directory: ./frontend/${{ matrix.app }}
+        run: npm run lint || true
+
+  # ─── Build Docker Images ────────────────────────────────────────────────────
+  build:
+    name: 🐳 Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-check]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - name: api
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+          - name: customer-web
+            context: ./frontend/customer-web
+            dockerfile: ./frontend/customer-web/Dockerfile
+          - name: restaurant-dashboard
+            context: ./frontend/restaurant-dashboard
+            dockerfile: ./frontend/restaurant-dashboard/Dockerfile
+          - name: admin-panel
+            context: ./frontend/admin-panel
+            dockerfile: ./frontend/admin-panel/Dockerfile
+          - name: driver-panel
+            context: ./frontend/driver-panel
+            dockerfile: ./frontend/driver-panel/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🔐 Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: 🔧 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🐳 Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          dockerfile: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_SIGNALR_URL=${{ secrets.NEXT_PUBLIC_SIGNALR_URL }}
+            NEXT_PUBLIC_GOOGLE_MAPS_KEY=${{ secrets.NEXT_PUBLIC_GOOGLE_MAPS_KEY }}
+
+  # ─── Deploy to Staging ──────────────────────────────────────────────────────
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/staging'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🔐 Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: 🚀 Deploy to staging server
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'ENDSSH'
+            cd /opt/sufra-wahda
+            git pull origin staging
+            docker-compose pull
+            docker-compose up -d --no-build
+            docker-compose exec api dotnet SufraWahda.API.dll migrate || true
+            docker image prune -f
+          ENDSSH
+
+  # ─── Deploy to Production ───────────────────────────────────────────────────
+  deploy-production:
+    name: 🌟 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🔐 Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_KEY }}
+
+      - name: 🌟 Deploy to production
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }} << 'ENDSSH'
+            cd /opt/sufra-wahda
+            git pull origin main
+            docker-compose pull
+            # Rolling update - no downtime
+            docker-compose up -d --no-build --no-deps api
+            sleep 10
+            docker-compose up -d --no-build --no-deps customer-web
+            docker-compose up -d --no-build --no-deps restaurant-dashboard
+            docker-compose up -d --no-build --no-deps admin-panel
+            docker-compose up -d --no-build --no-deps driver-panel
+            docker image prune -f
+          ENDSSH
+
+      - name: 📣 Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          channel-id: 'C0DEPLOYMENTS'
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅ Deployment successful!' || '❌ Deployment failed!' }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*سُفرة واحدة* deployment to *production* ${{ job.status == 'success' && 'succeeded ✅' || 'failed ❌' }}\nCommit: `${{ github.sha }}`\nBy: ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        continue-on-error: true

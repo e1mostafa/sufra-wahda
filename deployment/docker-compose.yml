@@ -1,0 +1,196 @@
+version: '3.8'
+
+services:
+  # =====================
+  # DATABASE
+  # =====================
+  postgres:
+    image: postgres:16-alpine
+    container_name: sufra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sufra_wahda_db
+      POSTGRES_USER: ${DB_USER:-sufra_admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - sufra-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sufra_admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =====================
+  # REDIS CACHE
+  # =====================
+  redis:
+    image: redis:7-alpine
+    container_name: sufra-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - sufra-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =====================
+  # ASP.NET CORE API
+  # =====================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sufra-api
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=sufra_wahda_db;Username=${DB_USER};Password=${DB_PASSWORD}
+      - ConnectionStrings__Redis=${REDIS_PASSWORD}@redis:6379
+      - Jwt__Secret=${JWT_SECRET}
+      - Jwt__Issuer=sufra-wahda
+      - Jwt__Audience=sufra-wahda-clients
+      - Cloudinary__CloudName=${CLOUDINARY_CLOUD_NAME}
+      - Cloudinary__ApiKey=${CLOUDINARY_API_KEY}
+      - Cloudinary__ApiSecret=${CLOUDINARY_API_SECRET}
+      - Firebase__ProjectId=${FIREBASE_PROJECT_ID}
+      - Firebase__ServiceAccountKey=${FIREBASE_SERVICE_ACCOUNT}
+      - Stripe__SecretKey=${STRIPE_SECRET_KEY}
+      - Stripe__WebhookSecret=${STRIPE_WEBHOOK_SECRET}
+      - Fawry__MerchantCode=${FAWRY_MERCHANT_CODE}
+      - Fawry__SecurityKey=${FAWRY_SECURITY_KEY}
+      - Vonage__ApiKey=${VONAGE_API_KEY}
+      - Vonage__ApiSecret=${VONAGE_API_SECRET}
+      - GoogleMaps__ApiKey=${GOOGLE_MAPS_API_KEY}
+      - SendGrid__ApiKey=${SENDGRID_API_KEY}
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sufra-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =====================
+  # CUSTOMER WEBSITE
+  # =====================
+  customer-web:
+    build:
+      context: ./frontend/customer-web
+      dockerfile: Dockerfile
+    container_name: sufra-customer
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=${API_URL}
+      - NEXT_PUBLIC_GOOGLE_MAPS_KEY=${GOOGLE_MAPS_API_KEY}
+      - NEXT_PUBLIC_FIREBASE_CONFIG=${FIREBASE_WEB_CONFIG}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    networks:
+      - sufra-network
+
+  # =====================
+  # RESTAURANT DASHBOARD
+  # =====================
+  restaurant-dashboard:
+    build:
+      context: ./frontend/restaurant-dashboard
+      dockerfile: Dockerfile
+    container_name: sufra-restaurant
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=${API_URL}
+    ports:
+      - "3001:3000"
+    depends_on:
+      - api
+    networks:
+      - sufra-network
+
+  # =====================
+  # ADMIN PANEL
+  # =====================
+  admin-panel:
+    build:
+      context: ./frontend/admin-panel
+      dockerfile: Dockerfile
+    container_name: sufra-admin
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=${API_URL}
+    ports:
+      - "3002:3000"
+    depends_on:
+      - api
+    networks:
+      - sufra-network
+
+  # =====================
+  # DRIVER PANEL (PWA)
+  # =====================
+  driver-panel:
+    build:
+      context: ./frontend/driver-panel
+      dockerfile: Dockerfile
+    container_name: sufra-driver
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=${API_URL}
+      - NEXT_PUBLIC_SIGNALR_URL=${SIGNALR_URL:-${API_URL}}
+      - NEXT_PUBLIC_GOOGLE_MAPS_KEY=${GOOGLE_MAPS_API_KEY}
+    ports:
+      - "3003:3000"
+    depends_on:
+      - api
+    networks:
+      - sufra-network
+
+  # =====================
+  # NGINX REVERSE PROXY
+  # =====================
+  nginx:
+    image: nginx:alpine
+    container_name: sufra-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - certbot_data:/etc/letsencrypt
+    depends_on:
+      - api
+      - customer-web
+      - restaurant-dashboard
+      - admin-panel
+    networks:
+      - sufra-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  certbot_data:
+
+networks:
+  sufra-network:
+    driver: bridge
