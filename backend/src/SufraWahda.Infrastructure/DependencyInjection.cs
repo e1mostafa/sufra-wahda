@@ -88,13 +88,13 @@ public class InMemoryCacheService : ICacheService
 
     public Task SetAsync<T>(string key, T value, TimeSpan? expiry = null, CancellationToken ct = default)
     {
-        var options = new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions
-        {
-            AbsoluteExpirationRelativeToNow = expiry ?? TimeSpan.FromHours(1)
-        };
-        _cache.Set(key, (object?)value, options);
-        return Task.CompletedTask;
-    }
+    var options = new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions
+      {
+        AbsoluteExpirationRelativeToNow = expiry ?? TimeSpan.FromHours(1)
+       };
+    _cache.Set(key, (object?)value, options);
+    return Task.CompletedTask;
+   }
 
     public Task RemoveAsync(string key, CancellationToken ct = default)
     {
