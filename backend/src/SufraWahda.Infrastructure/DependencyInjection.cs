@@ -82,13 +82,17 @@ public class InMemoryCacheService : ICacheService
 
     public Task<T?> GetAsync<T>(string key, CancellationToken ct = default)
     {
-        _cache.TryGetValue(key, out T? val);
-        return Task.FromResult(val);
+        _cache.TryGetValue(key, out object? cached);
+        return Task.FromResult(cached is T val ? val : default);
     }
 
     public Task SetAsync<T>(string key, T value, TimeSpan? expiry = null, CancellationToken ct = default)
     {
-        _cache.Set(key, value, expiry ?? TimeSpan.FromHours(1));
+        var options = new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = expiry ?? TimeSpan.FromHours(1)
+        };
+        _cache.Set(key, (object?)value, options);
         return Task.CompletedTask;
     }
 
